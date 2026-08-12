@@ -9,6 +9,10 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import os
+import stat
+import tarfile
+import shutil
 
 
 LLAMA_CPP_RELEASE_TAG = "b8840"
@@ -44,14 +48,66 @@ WINDOWS_CUDA_13 = PlatformSpec(
     ),
 )
 
+# Linux CPU spec
+LINUX_X64 = PlatformSpec(
+    key="linux-x64",
+    cli_executable="llama-cli",
+    asset_patterns=(
+        "llama-*-bin-linux-x86_64.tar.gz",
+        "llama-*-bin-linux-x86_64.tgz",
+        "llama-*-bin-linux-x86_64.zip",
+        "llama-*-bin-linux-x64.tar.gz",
+        "llama-*-bin-linux-x64.tgz",
+        "llama-*-bin-linux-x64.zip",
+    ),
+    required_files=(
+        "llama-cli",
+        "libggml.so",
+    ),
+)
+
+# Linux CUDA spec (heuristic support)
+LINUX_X64_CUDA_13 = PlatformSpec(
+    key="linux-x64-cuda13",
+    cli_executable="llama-cli",
+    asset_patterns=(
+        "llama-*-bin-linux-cuda-13*-x86_64.tar.gz",
+        "llama-*-bin-linux-cuda-13*-x86_64.tgz",
+        "llama-*-bin-linux-cuda-13*-x86_64.zip",
+        "llama-*-bin-linux-cuda-13*-x64.tar.gz",
+        "llama-*-bin-linux-cuda-13*-x64.tgz",
+        "llama-*-bin-linux-cuda-13*-x64.zip",
+    ),
+    required_files=(
+        "llama-cli",
+        # the CUDA runtime is typically provided by the system, but include common lib names
+        "libggml-cuda.so",
+    ),
+)
+
 
 def _platform_spec() -> PlatformSpec:
     system = platform.system().lower()
     machine = platform.machine().lower()
     if system == "windows" and machine in {"amd64", "x86_64"}:
         return WINDOWS_CUDA_13
+
+    if system == "linux":
+        # Allow forcing platform via env var LLC_PLATFORM
+        forced = os.environ.get("LLAMA_CPP_PLATFORM") or os.environ.get("LLC_PLATFORM")
+        if forced == "linux-x64-cuda13":
+            return LINUX_X64_CUDA_13
+        if forced == "linux-x64":
+            return LINUX_X64
+
+        # Heuristic detection for CUDA: presence of /usr/local/cuda or nvidia-smi on PATH
+        if Path("/usr/local/cuda").exists() or shutil.which("nvidia-smi"):
+            # Prefer CUDA build if device/runtime present; change if you prefer CPU default
+            return LINUX_X64_CUDA_13
+        return LINUX_X64
+
     raise RuntimeError(
-        "Automatic llama.cpp binary download currently supports Windows x64 CUDA 13 only. "
+        "Automatic llama.cpp binary download currently supports Windows x64 CUDA 13 and Linux x64 (CPU/CUDA). "
         "Other platforms are intentionally isolated behind the platform mapping for future support."
     )
 
@@ -182,6 +238,15 @@ def _existing_install(spec: PlatformSpec) -> LlamaCliPaths | None:
     return None
 
 
+def _safe_extract_tar(tar: tarfile.TarFile, path: Path) -> None:
+    # Prevent path traversal (see commons) — ensure members are inside path
+    for member in tar.getmembers():
+        member_path = Path(path) / member.name
+        if not str(member_path.resolve()).startswith(str(path.resolve())):
+            raise RuntimeError("Tar archive contains files outside target directory")
+    tar.extractall(path)
+
+
 def _extract_assets(assets: list[dict], install_dir: Path) -> None:
     with TemporaryDirectory(prefix="llm-text-processor-llama-download-") as temp:
         temp_dir = Path(temp)
@@ -189,8 +254,38 @@ def _extract_assets(assets: list[dict], install_dir: Path) -> None:
             archive_path = temp_dir / asset["name"]
             print(f"[LLM Text Processor] Downloading {asset['name']}...")
             _download(asset["browser_download_url"], archive_path)
-            with zipfile.ZipFile(archive_path) as archive:
-                archive.extractall(install_dir)
+
+            name_lower = asset["name"].lower()
+            try:
+                if name_lower.endswith(".zip"):
+                    with zipfile.ZipFile(archive_path) as archive:
+                        archive.extractall(install_dir)
+                elif name_lower.endswith((".tar.gz", ".tgz")):
+                    with tarfile.open(archive_path, "r:gz") as tar:
+                        _safe_extract_tar(tar, install_dir)
+                elif name_lower.endswith(".tar"):
+                    with tarfile.open(archive_path, "r:") as tar:
+                        _safe_extract_tar(tar, install_dir)
+                else:
+                    # fallback: try zip then tar
+                    try:
+                        with zipfile.ZipFile(archive_path) as archive:
+                            archive.extractall(install_dir)
+                    except zipfile.BadZipFile:
+                        with tarfile.open(archive_path, "r:*") as tar:
+                            _safe_extract_tar(tar, install_dir)
+            except Exception as ex:
+                raise RuntimeError(f"Failed to extract {archive_path}: {ex}")
+
+        # Ensure CLI is executable on POSIX systems
+        for path in install_dir.rglob("*"):
+            if path.is_file() and path.name in { "llama-cli", "llama-cli.exe" }:
+                try:
+                    mode = path.stat().st_mode
+                    path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                except Exception:
+                    # best-effort; ignore permission errors here and allow later checks to fail
+                    pass
 
 
 def ensure_llama_cli_paths() -> LlamaCliPaths:

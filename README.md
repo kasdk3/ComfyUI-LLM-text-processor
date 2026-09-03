@@ -1,7 +1,7 @@
 # ComfyUI LLM Text Processor
 
 Process text and images with GGUF LLMs in ComfyUI using llama.cpp, including
-Qwen3-VL, Qwen3.5, Qwen3.6, Gemma 4, and gpt-oss.
+Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.7, Qwen3.8, Gemma 4, and gpt-oss.
 
 This extension adds a local LLM node for prompt writing, prompt rewriting,
 translation, captioning, extraction, and other text processing tasks inside
@@ -31,7 +31,7 @@ llama.cpp-compatible families.
 
 Common examples:
 
-- Qwen text and vision families such as `Qwen3-VL`, `Qwen3.5`, and `Qwen3.6`
+- Qwen text and vision families such as `Qwen3-VL`, `Qwen3.5`, `Qwen3.6`, `Qwen3.7`, and `Qwen3.8`
 - Gemma 4 GGUF models such as `gemma-4-E2B`, `gemma-4-E4B`,
   `gemma-4-26b-a4b`, and `gemma-4-31b`
 - OpenAI `gpt-oss-20b` and `gpt-oss-120b`

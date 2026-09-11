@@ -117,6 +117,7 @@ def build_command(
         "--seed", str(normalize_llama_seed(seed)),
         "--single-turn",
         "--reasoning", reasoning,
+        "--simple-io",
     ]
 
     # In auto mode llama.cpp receives neither flag and uses its own placement
